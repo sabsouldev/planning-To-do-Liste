@@ -1,6 +1,18 @@
-﻿import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import html2pdf from "html2pdf.js";
 
-// Donnees initiales du planning hebdomadaire (colonnes par jour)
+// Reference de tous les jours de la semaine (pour pouvoir les restaurer)
+const allDays = [
+  { id: 1, name: "LUNDI",    color: "#4472C4" },
+  { id: 2, name: "MARDI",    color: "#ED7D31" },
+  { id: 3, name: "MERCREDI", color: "#70AD47" },
+  { id: 4, name: "JEUDI",    color: "#9B59B6" },
+  { id: 5, name: "VENDREDI", color: "#E74C3C" },
+  { id: 6, name: "SAMEDI",   color: "#1ABC9C" },
+  { id: 7, name: "DIMANCHE", color: "#F39C12" },
+];
+
+// Donnees initiales du planning hebdomadaire
 const initialDays = [
   {
     id: 1, name: "LUNDI", color: "#4472C4",
@@ -44,15 +56,14 @@ const initialDays = [
     ],
   },
   { id: 6, name: "SAMEDI", color: "#1ABC9C", events: [] },
-  { id: 7, name: "DIMANCHE", color: "#F39C12", events: [] },
 ];
 
-// Taches initiales de la to-do list (non planifiees au depart)
+// Taches initiales de la to-do list avec priorite
 const initialTodos = [
-  { id: 1, label: "Acheter du pain", type: "courses", time: "", done: false },
-  { id: 2, label: "Appeler médecin", type: "rdv", time: "", done: false },
-  { id: 3, label: "Lessive couleurs", type: "maison", time: "", done: false },
-  { id: 4, label: "Sport 15 mins", type: "sport", time: "", done: false },
+  { id: 1, label: "Acheter du pain", type: "courses", time: "", done: false, priority: "moyenne" },
+  { id: 2, label: "Appeler médecin", type: "rdv", time: "", done: false, priority: "haute" },
+  { id: 3, label: "Lessive couleurs", type: "maison", time: "", done: false, priority: "basse" },
+  { id: 4, label: "Sport 15 mins", type: "sport", time: "", done: false, priority: "moyenne" },
 ];
 
 // Palette de couleurs par type d'activite/tache
@@ -73,6 +84,13 @@ const typeLabels = {
   aide: "Aide", travail: "Travail", plaisir: "Plaisir",
   maison: "Maison", rdv: "Rendez-vous", note: "Note",
   sport: "Sport 🏃", courses: "Courses 🛒", autre: "Autre",
+};
+
+// Priorites avec couleurs et ordre de tri
+const priorityConfig = {
+  haute:   { label: "🔴 Haute",   color: "#E74C3C", order: 1 },
+  moyenne: { label: "🟡 Moyenne", color: "#F39C12", order: 2 },
+  basse:   { label: "🟢 Basse",  color: "#27AE60", order: 3 },
 };
 
 // Extrait l'heure de debut pour trier les evenements
@@ -104,17 +122,44 @@ const iconBtn = (bg) => ({
   cursor: "pointer", fontSize: 11, padding: "2px 5px", lineHeight: 1,
 });
 
+// Charge les donnees depuis localStorage ou renvoie la valeur par defaut
+const loadState = (key, fallback) => {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : fallback;
+  } catch { return fallback; }
+};
+
 export default function App() {
-  // Etats principaux de l'application
-  const [days, setDays] = useState(initialDays);
-  const [todos, setTodos] = useState(initialTodos);
+  // Etats principaux de l'application (persistés dans localStorage)
+  const [days, setDays] = useState(() => loadState("planning-days", initialDays));
+  const [todos, setTodos] = useState(() => loadState("planning-todos", initialTodos));
   const [editingEvent, setEditingEvent] = useState(null);
   const [editForm, setEditForm] = useState({ time: "", label: "", type: "autre" });
   const [deletingDay, setDeletingDay] = useState(null);
-  const [newTodo, setNewTodo] = useState({ label: "", time: "", type: "courses" });
+  const [newTodo, setNewTodo] = useState({ label: "", time: "", type: "courses", priority: "moyenne" });
   const [addingTodo, setAddingTodo] = useState(false);
   const [dragOver, setDragOver] = useState(null);
   const draggingTodo = useRef(null);
+  const planningRef = useRef(null);
+
+  // Sauvegarde automatique dans localStorage
+  useEffect(() => { localStorage.setItem("planning-days", JSON.stringify(days)); }, [days]);
+  useEffect(() => { localStorage.setItem("planning-todos", JSON.stringify(todos)); }, [todos]);
+
+  // Export PDF
+  const handleExportPDF = () => {
+    const element = planningRef.current;
+    if (!element) return;
+    const opt = {
+      margin: [5, 5, 5, 5],
+      filename: "planning-semaine.pdf",
+      image: { type: "jpeg", quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: "#1a1a2e" },
+      jsPDF: { unit: "mm", format: "a4", orientation: "landscape" },
+    };
+    html2pdf().set(opt).from(element).save();
+  };
 
   // Ouvre le mode edition pour un evenement
   const handleEditEvent = (dayId, event) => {
@@ -145,11 +190,22 @@ export default function App() {
     setDeletingDay(null);
   };
 
+  // Restaure un jour supprime (vide, a sa bonne position dans la semaine)
+  const handleRestoreDay = (dayRef) => {
+    setDays(prev => {
+      const updated = [...prev, { ...dayRef, events: [] }];
+      return updated.sort((a, b) => a.id - b.id);
+    });
+  };
+
+  // Jours actuellement absents du planning
+  const missingDays = allDays.filter(d => !days.some(existing => existing.id === d.id));
+
   // Ajoute une nouvelle tache dans la to-do list
   const handleAddTodo = () => {
     if (!newTodo.label.trim()) return;
     setTodos([...todos, { id: Date.now(), ...newTodo, done: false }]);
-    setNewTodo({ label: "", time: "", type: "courses" });
+    setNewTodo({ label: "", time: "", type: "courses", priority: "moyenne" });
     setAddingTodo(false);
   };
 
@@ -177,6 +233,11 @@ export default function App() {
   const activeTodos = todos.filter(t => !t.done);
   const doneTodos = todos.filter(t => t.done);
 
+  // Taches triees par priorite pour le panneau Notes
+  const sortedByPriority = [...activeTodos].sort(
+    (a, b) => (priorityConfig[a.priority]?.order || 99) - (priorityConfig[b.priority]?.order || 99)
+  );
+
   return (
     <div style={{ minHeight: "100vh", width: "100%", background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)", fontFamily: "'Segoe UI', sans-serif", padding: "20px 16px" }}>
 
@@ -188,6 +249,21 @@ export default function App() {
             <div style={{ color: "#fff", fontSize: 22, fontWeight: 700, letterSpacing: 2 }}>PLANNING DE LA SEMAINE</div>
             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, letterSpacing: 3, marginTop: 2 }}>ÉDITABLE · INTERACTIF</div>
           </div>
+          <button
+            onClick={handleExportPDF}
+            style={{
+              marginLeft: 16, background: "linear-gradient(135deg, #E74C3C, #C0392B)",
+              color: "#fff", border: "none", borderRadius: 10, padding: "8px 18px",
+              cursor: "pointer", fontSize: 13, fontWeight: 700, letterSpacing: 1,
+              display: "flex", alignItems: "center", gap: 6,
+              boxShadow: "0 4px 15px rgba(231,76,60,0.4)",
+              transition: "transform 0.15s",
+            }}
+            onMouseEnter={e => e.currentTarget.style.transform = "scale(1.05)"}
+            onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
+          >
+            📄 Export PDF
+          </button>
         </div>
       </div>
 
@@ -207,77 +283,181 @@ export default function App() {
         ))}
       </div>
 
-      {/* Colonne principale */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 1400, margin: "0 auto" }}>
+      {/* Zone exportable en PDF */}
+      <div ref={planningRef} style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 1400, margin: "0 auto" }}>
 
-        {/* Planning grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
-          {days.map(day => (
-            <div
-              key={day.id}
-              onDragOver={e => { e.preventDefault(); setDragOver(day.id); }}
-              onDragLeave={() => setDragOver(null)}
-              onDrop={() => handleDrop(day.id)}
-              style={{
-                background: dragOver === day.id ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)",
-                borderRadius: 16,
-                border: dragOver === day.id ? `2px solid ${day.color}` : "1px solid rgba(255,255,255,0.1)",
-                overflow: "hidden",
-                backdropFilter: "blur(6px)",
-                transition: "all 0.2s",
-                boxShadow: dragOver === day.id ? `0 0 20px ${day.color}55` : "none",
-              }}
-            >
-              <div style={{ background: day.color, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: "#fff", fontWeight: 800, fontSize: 13, letterSpacing: 2 }}>{day.name}</span>
-                <button onClick={() => setDeletingDay(day.id)} style={{ background: "rgba(0,0,0,0.2)", border: "none", borderRadius: "50%", width: 20, height: 20, color: "#fff", cursor: "pointer", fontSize: 11 }}>✕</button>
-              </div>
+        {/* Planning grid + Panneau Notes */}
+        <div style={{ display: "flex", gap: 12 }}>
 
-              {dragOver === day.id && (
-                <div style={{ background: `${day.color}22`, borderBottom: `1px dashed ${day.color}`, padding: "6px", textAlign: "center", color: day.color, fontSize: 11, fontWeight: 700 }}>
-                  ⬇ Déposer ici
+          {/* Grille des jours (Lundi-Samedi) */}
+          <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
+            {days.map(day => (
+              <div
+                key={day.id}
+                onDragOver={e => { e.preventDefault(); setDragOver(day.id); }}
+                onDragLeave={() => setDragOver(null)}
+                onDrop={() => handleDrop(day.id)}
+                style={{
+                  background: dragOver === day.id ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)",
+                  borderRadius: 16,
+                  border: dragOver === day.id ? `2px solid ${day.color}` : "1px solid rgba(255,255,255,0.1)",
+                  overflow: "hidden",
+                  backdropFilter: "blur(6px)",
+                  transition: "all 0.2s",
+                  boxShadow: dragOver === day.id ? `0 0 20px ${day.color}55` : "none",
+                }}
+              >
+                <div style={{ background: day.color, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: "#fff", fontWeight: 800, fontSize: 13, letterSpacing: 2 }}>{day.name}</span>
+                  <button onClick={() => setDeletingDay(day.id)} style={{ background: "rgba(0,0,0,0.2)", border: "none", borderRadius: "50%", width: 20, height: 20, color: "#fff", cursor: "pointer", fontSize: 11 }}>✕</button>
                 </div>
-              )}
 
-              <div style={{ padding: "10px 10px 6px" }}>
-                {day.events.length === 0 && dragOver !== day.id && (
-                  <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, textAlign: "center", padding: "12px 0", fontStyle: "italic" }}>Glisser une tâche ici</div>
+                {dragOver === day.id && (
+                  <div style={{ background: `${day.color}22`, borderBottom: `1px dashed ${day.color}`, padding: "6px", textAlign: "center", color: day.color, fontSize: 11, fontWeight: 700 }}>
+                    ⬇ Déposer ici
+                  </div>
                 )}
-                {day.events.map(event => {
-                  const tc = typeColors[event.type] || typeColors.autre;
-                  const isEditing = editingEvent?.dayId === day.id && editingEvent?.eventId === event.id;
-                  return (
-                    <div key={event.id} style={{ background: tc.bg, border: `1.5px solid ${tc.border}`, borderRadius: 10, marginBottom: 7, padding: "7px 9px" }}>
-                      {isEditing ? (
-                        <div>
-                          <input value={editForm.time} onChange={e => setEditForm({ ...editForm, time: e.target.value })} placeholder="Horaire" style={inputStyle} />
-                          <input value={editForm.label} onChange={e => setEditForm({ ...editForm, label: e.target.value })} placeholder="Événement" style={{ ...inputStyle, marginTop: 4 }} />
-                          <select value={editForm.type} onChange={e => setEditForm({ ...editForm, type: e.target.value })} style={{ ...inputStyle, marginTop: 4 }}>
-                            {Object.entries(typeLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                          </select>
-                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                            <button onClick={handleSaveEdit} style={btnSave}>✓</button>
-                            <button onClick={() => setEditingEvent(null)} style={btnCancel}>✕</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+
+                <div style={{ padding: "10px 10px 6px" }}>
+                  {day.events.length === 0 && dragOver !== day.id && (
+                    <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, textAlign: "center", padding: "12px 0", fontStyle: "italic" }}>Glisser une tâche ici</div>
+                  )}
+                  {day.events.map(event => {
+                    const tc = typeColors[event.type] || typeColors.autre;
+                    const isEditing = editingEvent?.dayId === day.id && editingEvent?.eventId === event.id;
+                    return (
+                      <div key={event.id} style={{ background: tc.bg, border: `1.5px solid ${tc.border}`, borderRadius: 10, marginBottom: 7, padding: "7px 9px" }}>
+                        {isEditing ? (
                           <div>
-                            {event.time && <div style={{ color: tc.border, fontWeight: 700, fontSize: 10, marginBottom: 2 }}>{event.time}</div>}
-                            <div style={{ color: "#2c3e50", fontSize: 12, fontWeight: 600 }}>{event.label}</div>
+                            <input value={editForm.time} onChange={e => setEditForm({ ...editForm, time: e.target.value })} placeholder="Horaire" style={inputStyle} />
+                            <input value={editForm.label} onChange={e => setEditForm({ ...editForm, label: e.target.value })} placeholder="Événement" style={{ ...inputStyle, marginTop: 4 }} />
+                            <select value={editForm.type} onChange={e => setEditForm({ ...editForm, type: e.target.value })} style={{ ...inputStyle, marginTop: 4 }}>
+                              {Object.entries(typeLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                            </select>
+                            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                              <button onClick={handleSaveEdit} style={btnSave}>✓</button>
+                              <button onClick={() => setEditingEvent(null)} style={btnCancel}>✕</button>
+                            </div>
                           </div>
-                          <div style={{ display: "flex", gap: 3, marginLeft: 4 }}>
-                            <button onClick={() => handleEditEvent(day.id, event)} style={iconBtn("rgba(0,0,0,0.1)")}>✏️</button>
-                            <button onClick={() => handleDeleteEvent(day.id, event.id)} style={iconBtn("rgba(231,76,60,0.15)")}>🗑</button>
+                        ) : (
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <div>
+                              {event.time && <div style={{ color: tc.border, fontWeight: 700, fontSize: 10, marginBottom: 2 }}>{event.time}</div>}
+                              <div style={{ color: "#2c3e50", fontSize: 12, fontWeight: 600 }}>{event.label}</div>
+                            </div>
+                            <div style={{ display: "flex", gap: 3, marginLeft: 4 }}>
+                              <button onClick={() => handleEditEvent(day.id, event)} style={iconBtn("rgba(0,0,0,0.1)")}>✏️</button>
+                              <button onClick={() => handleDeleteEvent(day.id, event.id)} style={iconBtn("rgba(231,76,60,0.15)")}>🗑</button>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Boutons pour restaurer les jours supprimés */}
+          {missingDays.length > 0 && (
+            <div style={{
+              display: "flex", flexDirection: "column", gap: 6,
+              justifyContent: "flex-start", alignSelf: "flex-start",
+            }}>
+              {missingDays.map(d => (
+                <button
+                  key={d.id}
+                  onClick={() => handleRestoreDay(d)}
+                  style={{
+                    background: `${d.color}22`, border: `1.5px dashed ${d.color}`,
+                    borderRadius: 10, color: d.color, fontSize: 11, fontWeight: 700,
+                    padding: "8px 14px", cursor: "pointer", letterSpacing: 1,
+                    transition: "all 0.15s", whiteSpace: "nowrap",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = `${d.color}44`; e.currentTarget.style.transform = "scale(1.05)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = `${d.color}22`; e.currentTarget.style.transform = "scale(1)"; }}
+                >
+                  + {d.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Panneau Notes & Priorites (remplace Dimanche) */}
+          <div style={{
+            width: 260, minWidth: 240, flexShrink: 0,
+            background: "rgba(255,255,255,0.04)",
+            borderRadius: 16,
+            border: "1px solid rgba(255,255,255,0.1)",
+            overflow: "hidden",
+            backdropFilter: "blur(6px)",
+          }}>
+            <div style={{
+              background: "linear-gradient(135deg, #F39C12, #E67E22)",
+              padding: "10px 12px",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <span style={{ fontSize: 16 }}>📌</span>
+              <span style={{ color: "#fff", fontWeight: 800, fontSize: 13, letterSpacing: 2 }}>NOTES & PRIORITÉS</span>
+            </div>
+
+            <div style={{ padding: "12px 10px" }}>
+              {sortedByPriority.length === 0 ? (
+                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, textAlign: "center", padding: "20px 0", fontStyle: "italic" }}>
+                  Aucune tâche en cours
+                </div>
+              ) : (
+                sortedByPriority.map((todo, index) => {
+                  const tc = typeColors[todo.type] || typeColors.autre;
+                  const pc = priorityConfig[todo.priority] || priorityConfig.moyenne;
+                  return (
+                    <div key={todo.id} style={{
+                      background: tc.bg, border: `1.5px solid ${tc.border}`,
+                      borderRadius: 10, marginBottom: 8, padding: "8px 10px",
+                      borderLeft: `4px solid ${pc.color}`,
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, color: pc.color,
+                          background: `${pc.color}18`, borderRadius: 6, padding: "1px 6px",
+                          letterSpacing: 1,
+                        }}>
+                          {pc.label}
+                        </span>
+                        <span style={{ color: "rgba(0,0,0,0.3)", fontSize: 10, fontWeight: 700 }}>#{index + 1}</span>
+                      </div>
+                      <div style={{ color: "#2c3e50", fontSize: 12, fontWeight: 600 }}>{todo.label}</div>
+                      {todo.time && <div style={{ color: tc.border, fontSize: 10, fontWeight: 700, marginTop: 2 }}>{todo.time}</div>}
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
+                        <span style={{
+                          fontSize: 9, color: tc.border, background: `${tc.border}15`,
+                          borderRadius: 4, padding: "1px 5px", fontWeight: 600,
+                        }}>
+                          {typeLabels[todo.type] || "Autre"}
+                        </span>
+                      </div>
                     </div>
                   );
-                })}
+                })
+              )}
+
+              {/* Legende des priorites */}
+              <div style={{
+                marginTop: 12, paddingTop: 10,
+                borderTop: "1px solid rgba(255,255,255,0.1)",
+              }}>
+                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 9, fontWeight: 700, letterSpacing: 2, marginBottom: 6 }}>PRIORITÉS</div>
+                {Object.entries(priorityConfig).map(([key, cfg]) => (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: cfg.color }} />
+                    <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 10 }}>{cfg.label}</span>
+                  </div>
+                ))}
               </div>
             </div>
-          ))}
+          </div>
+
         </div>
 
         {/* TO-DO LIST en bas pleine largeur */}
@@ -295,6 +475,7 @@ export default function App() {
 
             {activeTodos.map(todo => {
               const tc = typeColors[todo.type] || typeColors.autre;
+              const pc = priorityConfig[todo.priority] || priorityConfig.moyenne;
               return (
                 <div
                   key={todo.id}
@@ -303,6 +484,7 @@ export default function App() {
                   style={{
                     background: tc.bg, border: `1.5px solid ${tc.border}`,
                     borderRadius: 10, padding: "8px 10px",
+                    borderLeft: `4px solid ${pc.color}`,
                     cursor: "grab", display: "flex", alignItems: "center",
                     gap: 8, userSelect: "none", transition: "transform 0.15s",
                     minWidth: 160,
@@ -314,7 +496,10 @@ export default function App() {
                   <input type="checkbox" checked={todo.done} onChange={() => handleToggleTodo(todo.id)} style={{ cursor: "pointer", accentColor: tc.border, flexShrink: 0 }} />
                   <div style={{ flex: 1 }}>
                     <div style={{ color: "#2c3e50", fontSize: 12, fontWeight: 600 }}>{todo.label}</div>
-                    {todo.time && <div style={{ color: tc.border, fontSize: 10, fontWeight: 700 }}>{todo.time}</div>}
+                    <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 2 }}>
+                      {todo.time && <span style={{ color: tc.border, fontSize: 10, fontWeight: 700 }}>{todo.time}</span>}
+                      <span style={{ fontSize: 9, color: pc.color, fontWeight: 700 }}>{pc.label}</span>
+                    </div>
                   </div>
                   <button onClick={() => handleDeleteTodo(todo.id)} style={{ ...iconBtn("rgba(231,76,60,0.15)"), flexShrink: 0 }}>🗑</button>
                 </div>
@@ -339,6 +524,9 @@ export default function App() {
                 />
                 <select value={newTodo.type} onChange={e => setNewTodo({ ...newTodo, type: e.target.value })} style={{ ...inputStyle, marginTop: 4 }}>
                   {Object.entries(typeLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+                <select value={newTodo.priority} onChange={e => setNewTodo({ ...newTodo, priority: e.target.value })} style={{ ...inputStyle, marginTop: 4 }}>
+                  {Object.entries(priorityConfig).map(([k, cfg]) => <option key={k} value={k}>{cfg.label}</option>)}
                 </select>
                 <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                   <button onClick={handleAddTodo} style={btnSave}>+ Ajouter</button>
@@ -392,5 +580,3 @@ export default function App() {
     </div>
   );
 }
-
-
